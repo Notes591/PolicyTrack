@@ -162,9 +162,20 @@ if st.button("تحديث جميع الحالات الآن"):
         progress.progress(idx / len(policy_data))
     st.success("✅ تم تحديث جميع الحالات")
 
+# ====== تصحيح الصفوف قبل إنشاء DataFrame ======
+def normalize_rows(data, num_columns):
+    normalized = []
+    for row in data:
+        row = row[:num_columns]
+        row += ["—"] * (num_columns - len(row))
+        normalized.append(row)
+    return normalized
+
 # ====== تصنيف البيانات لعرضها ======
 delayed_shipments = [row for row in policy_data[1:] if int(row[4]) > 3 and row[3].strip().lower() != "delivered"]
 current_shipments = [row for row in policy_data[1:] if int(row[4]) <= 3 and row[3].strip().lower() != "delivered"]
+delayed_shipments = normalize_rows(delayed_shipments, 6)
+current_shipments = normalize_rows(current_shipments, 6)
 
 # ====== تحديث تبويب "تم التسليم" تلقائياً ======
 delivered_shipments = [row for row in delivered_sheet.get_all_values()[1:]]  # من تبويب التسليم
