@@ -48,7 +48,10 @@ returned_sheet = get_or_create_sheet(RETURNED_SHEET)
 # ====== تحميل شيت Order Number ======
 order_sheet = client.open(SHEET_NAME).worksheet(ORDERS_SHEET)
 order_data = order_sheet.get_all_values()
-order_dict = {row[0]: row[1] for row in order_data[1:]}  # رقم الطلب : المندوب
+
+# بناء قاموس رقم الطلب → المندوب
+# شيت Order Number: التاريخ | رقم الطلب | الموقع | المندوب | ملاحظات
+order_dict = {row[1]: row[3] for row in order_data[1:] if len(row) > 3 and row[3].strip()}
 
 # ====== إعداد صفحة Streamlit ======
 st.set_page_config(page_title="📦 تتبع الشحنات", page_icon="🚚", layout="wide")
@@ -126,7 +129,7 @@ for idx, row in enumerate(policy_data[1:], start=2):
     except:
         pass
     order_num = str(row[0])
-    if order_num in order_dict and order_dict[order_num].strip():
+    if order_num in order_dict:
         row[5] = "مشحون"
     else:
         row[5] = "غير مشحون"
