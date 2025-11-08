@@ -28,14 +28,19 @@ ORDERS_SHEET = "Order Number"
 # ====== تحميل ورقة Policy number ======
 policy_sheet = client.open(SHEET_NAME).worksheet(POLICY_SHEET)
 
-# ====== إنشاء/تحميل تبويبات التسليم والإرجاع ======
+# ====== إنشاء/تحميل تبويبات التسليم والإرجاع مع معالجة الأخطاء ======
 def get_or_create_sheet(sheet_name):
     try:
-        return client.open(SHEET_NAME).worksheet(sheet_name)
-    except gspread.exceptions.WorksheetNotFound:
-        sheet = client.open(SHEET_NAME).add_worksheet(title=sheet_name, rows="100", cols="10")
-        sheet.append_row(["Order Number", "Policy Number", "Date", "Status", "Days Since Shipment"])
+        sheet = client.open(SHEET_NAME).worksheet(sheet_name)
         return sheet
+    except gspread.exceptions.WorksheetNotFound:
+        try:
+            sheet = client.open(SHEET_NAME).add_worksheet(title=sheet_name, rows="100", cols="10")
+            sheet.append_row(["Order Number", "Policy Number", "Date", "Status", "Days Since Shipment"])
+            return sheet
+        except gspread.exceptions.APIError as e:
+            st.error(f"❌ لا يمكن إنشاء الورقة '{sheet_name}': {e}")
+            st.stop()
 
 delivered_sheet = get_or_create_sheet(DELIVERED_SHEET)
 returned_sheet = get_or_create_sheet(RETURNED_SHEET)
@@ -105,7 +110,6 @@ policy_data = policy_sheet.get_all_values()
 for idx, row in enumerate(policy_data[1:], start=2):
     if len(row) < 6:
         row += ["0", "غير معروف"] * (6 - len(row))
-    # حساب الأيام منذ الشحنة
     date_added_str = row[2] if len(row) > 2 else None
     days_diff = 0
     if date_added_str and date_added_str.strip():
@@ -121,7 +125,6 @@ for idx, row in enumerate(policy_data[1:], start=2):
         policy_sheet.update_cell(idx, 5, days_diff)
     except:
         pass
-    # حالة الشحن (مشحون / غير مشحون)
     order_num = str(row[0])
     if order_num in order_dict and order_dict[order_num].strip():
         row[5] = "مشحون"
@@ -131,7 +134,6 @@ for idx, row in enumerate(policy_data[1:], start=2):
 # ====== البحث عن شحنة ======
 st.header("🔍 البحث عن شحنة")
 search_order = st.text_input("أدخل رقم الطلب للبحث")
-
 if search_order.strip():
     found = False
     for i, row in enumerate(policy_data[1:], start=2):
@@ -142,7 +144,6 @@ if search_order.strip():
             status = row[3] if len(row) > 3 else "—"
             days_since = row[4] if len(row) > 4 else "—"
             shipping_state = row[5] if len(row) > 5 else "غير معروف"
-
             st.success(f"✅ تم العثور على الطلب رقم: {search_order}")
             st.info(f"📦 رقم الشحنة: {policy_number}")
             st.write(f"📅 التاريخ: {date_added}")
@@ -183,22 +184,26 @@ current_shipments = [row for row in policy_data[1:] if int(row[4]) <= 3 and row[
 delayed_shipments = normalize_rows(delayed_shipments, 6)
 current_shipments = normalize_rows(current_shipments, 6)
 
-# ====== تحديث تبويبات التسليم والإرجاع تلقائياً ======
+# ====== تحديث تبويبات التسليم والإرجاع دفعة واحدة ======
 delivered_shipments = [row for row in delivered_sheet.get_all_values()[1:]]
 returned_shipments = [row for row in returned_sheet.get_all_values()[1:]]
 
-for row in policy_data[1:]:
-    status_lower = row[3].strip().lower()
-    if status_lower in ["delivered", "تم التسليم"]:
-        existing = [r[1] for r in delivered_shipments]
-        if row[1] not in existing:
-            delivered_sheet.append_row(row[:5])
-            delivered_shipments.append(row)
-    elif status_lower in ["returned", "تم الإرجاع"]:
-        existing = [r[1] for r in returned_shipments]
-        if row[1] not in existing:
-            returned_sheet.append_row(row[:5])
-            returned_shipments.append(row)
+new_delivered = [row[:5] for row in policy_data[1:] if row[3].strip().lower() in ["delivered", "تم التسليم"] and row[1] not in [r[1] for r in delivered_shipments]]
+new_returned = [row[:5] for row in policy_data[1:] if row[3].strip().lower() in ["returned", "تم الإرجاع"] and row[1] not in [r[1] for r in returned_shipments]]
+
+if new_delivered:
+    try:
+        delivered_sheet.append_rows(new_delivered, value_input_option='USER_ENTERED')
+        delivered_shipments.extend(new_delivered)
+    except gspread.exceptions.APIError as e:
+        st.error(f"❌ خطأ عند إضافة الشحنات إلى التسليم: {e}")
+
+if new_returned:
+    try:
+        returned_sheet.append_rows(new_returned, value_input_option='USER_ENTERED')
+        returned_shipments.extend(new_returned)
+    except gspread.exceptions.APIError as e:
+        st.error(f"❌ خطأ عند إضافة الشحنات إلى الإرجاع: {e}")
 
 # ====== عرض الجداول ======
 st.markdown("---")
