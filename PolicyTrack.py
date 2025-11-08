@@ -8,6 +8,7 @@ import xml.etree.ElementTree as ET
 import re
 from streamlit_autorefresh import st_autorefresh
 import pandas as pd
+import time
 
 # ====== تحديث تلقائي كل 10 دقائق ======
 st_autorefresh(interval=600000, key="auto_refresh")
@@ -50,7 +51,6 @@ order_sheet = client.open(SHEET_NAME).worksheet(ORDERS_SHEET)
 order_data = order_sheet.get_all_values()
 
 # بناء قاموس رقم الطلب → المندوب
-# شيت Order Number: التاريخ | رقم الطلب | الموقع | المندوب | ملاحظات
 order_dict = {row[1]: row[3] for row in order_data[1:] if len(row) > 3 and row[3].strip()}
 
 # ====== إعداد صفحة Streamlit ======
@@ -109,8 +109,9 @@ def get_aramex_status(awb_number):
 # ====== تحميل بيانات الشيت ======
 policy_data = policy_sheet.get_all_values()
 
-# ====== تحديث أيام الشحن وحالة الشحن ======
-for idx, row in enumerate(policy_data[1:], start=2):
+# ====== تحديث أيام الشحن وحالة الشحن دفعة واحدة ======
+cells = policy_sheet.range(f'E2:E{len(policy_data)}')
+for idx, row in enumerate(policy_data[1:]):
     if len(row) < 6:
         row += ["0", "غير معروف"] * (6 - len(row))
     date_added_str = row[2] if len(row) > 2 else None
@@ -124,35 +125,25 @@ for idx, row in enumerate(policy_data[1:], start=2):
             except:
                 continue
     row[4] = days_diff
-    try:
-        policy_sheet.update_cell(idx, 5, days_diff)
-    except:
-        pass
+    cells[idx].value = days_diff
     order_num = str(row[0])
-    if order_num in order_dict:
-        row[5] = "مشحون"
-    else:
-        row[5] = "غير مشحون"
+    row[5] = "مشحون" if order_num in order_dict else "غير مشحون"
+policy_sheet.update_cells(cells)
 
 # ====== البحث عن شحنة ======
 st.header("🔍 البحث عن شحنة")
 search_order = st.text_input("أدخل رقم الطلب للبحث")
 if search_order.strip():
     found = False
-    for i, row in enumerate(policy_data[1:], start=2):
+    for row in policy_data[1:]:
         if len(row) >= 2 and str(row[0]) == search_order:
             found = True
-            policy_number = row[1]
-            date_added = row[2] if len(row) > 2 else "—"
-            status = row[3] if len(row) > 3 else "—"
-            days_since = row[4] if len(row) > 4 else "—"
-            shipping_state = row[5] if len(row) > 5 else "غير معروف"
             st.success(f"✅ تم العثور على الطلب رقم: {search_order}")
-            st.info(f"📦 رقم الشحنة: {policy_number}")
-            st.write(f"📅 التاريخ: {date_added}")
-            st.write(f"🔄 الحالة الحالية: {status}")
-            st.write(f"⏳ أيام منذ الشحن: {days_since}")
-            st.write(f"🚚 حالة الشحن: {shipping_state}")
+            st.info(f"📦 رقم الشحنة: {row[1]}")
+            st.write(f"📅 التاريخ: {row[2] if len(row) > 2 else '—'}")
+            st.write(f"🔄 الحالة الحالية: {row[3] if len(row) > 3 else '—'}")
+            st.write(f"⏳ أيام منذ الشحن: {row[4] if len(row) > 4 else '—'}")
+            st.write(f"🚚 حالة الشحن: {row[5] if len(row) > 5 else 'غير معروف'}")
             break
     if not found:
         st.error("⚠️ لم يتم العثور على الطلب في الشيت")
@@ -165,11 +156,12 @@ if st.button("تحديث جميع الحالات الآن"):
             if row[3].strip().lower() not in ["delivered", "تم التسليم", "returned", "تم الإرجاع", "shipment charges paid"]:
                 new_status = get_aramex_status(row[1])
                 row[3] = new_status
-                try:
-                    policy_sheet.update_cell(idx, 4, new_status)
-                except:
-                    pass
         progress.progress(idx / len(policy_data))
+    # تحديث العمود دفعة واحدة
+    cells = policy_sheet.range(f'D2:D{len(policy_data)}')
+    for idx, row in enumerate(policy_data[1:]):
+        cells[idx].value = row[3]
+    policy_sheet.update_cells(cells)
     st.success("✅ تم تحديث جميع الحالات")
 
 # ====== تصحيح الصفوف قبل إنشاء DataFrame ======
@@ -187,24 +179,30 @@ current_shipments = [row for row in policy_data[1:] if int(row[4]) <= 3 and row[
 delayed_shipments = normalize_rows(delayed_shipments, 6)
 current_shipments = normalize_rows(current_shipments, 6)
 
-# ====== تحديث تبويبات التسليم والإرجاع دفعة واحدة ======
+# ====== دالة لإضافة الصفوف في دفعات لتجنب تجاوز الكوتا ======
+def append_in_batches(sheet, rows, batch_size=20):
+    for i in range(0, len(rows), batch_size):
+        batch = rows[i:i+batch_size]
+        sheet.append_rows(batch, value_input_option='USER_ENTERED')
+        time.sleep(1)
+
+# ====== تحديث تبويبات التسليم والإرجاع ======
 delivered_shipments = [row for row in delivered_sheet.get_all_values()[1:]]
 returned_shipments = [row for row in returned_sheet.get_all_values()[1:]]
 
-# اعتبار "Shipment charges paid" كـ تم التسليم أيضًا
 new_delivered = [row[:5] for row in policy_data[1:] if row[3].strip().lower() in ["delivered", "تم التسليم", "shipment charges paid"] and row[1] not in [r[1] for r in delivered_shipments]]
 new_returned = [row[:5] for row in policy_data[1:] if row[3].strip().lower() in ["returned", "تم الإرجاع"] and row[1] not in [r[1] for r in returned_shipments]]
 
 if new_delivered:
     try:
-        delivered_sheet.append_rows(new_delivered, value_input_option='USER_ENTERED')
+        append_in_batches(delivered_sheet, new_delivered)
         delivered_shipments.extend(new_delivered)
     except gspread.exceptions.APIError as e:
         st.error(f"❌ خطأ عند إضافة الشحنات إلى التسليم: {e}")
 
 if new_returned:
     try:
-        returned_sheet.append_rows(new_returned, value_input_option='USER_ENTERED')
+        append_in_batches(returned_sheet, new_returned)
         returned_shipments.extend(new_returned)
     except gspread.exceptions.APIError as e:
         st.error(f"❌ خطأ عند إضافة الشحنات إلى الإرجاع: {e}")
@@ -221,11 +219,7 @@ st.markdown("---")
 st.subheader("✅ الشحنات التي تم توصيلها")
 if delivered_shipments:
     df_delivered = pd.DataFrame(delivered_shipments, columns=["Order Number","Policy Number","Date","Status","Days Since Shipment"])
-    for i, row in df_delivered.iterrows():
-        st.write(row.to_dict())
-        if st.button(f"حذف {row['Order Number']} من التسليم"):
-            delivered_sheet.delete_rows(i+2)
-            st.success(f"✅ تم حذف {row['Order Number']} من التسليم")
+    st.dataframe(df_delivered, use_container_width=True)
 else:
     st.info("لا توجد شحنات تم توصيلها حالياً.")
 
@@ -233,11 +227,7 @@ st.markdown("---")
 st.subheader("📤 الشحنات التي تم إرجاعها")
 if returned_shipments:
     df_returned = pd.DataFrame(returned_shipments, columns=["Order Number","Policy Number","Date","Status","Days Since Shipment"])
-    for i, row in df_returned.iterrows():
-        st.write(row.to_dict())
-        if st.button(f"حذف {row['Order Number']} من الإرجاع"):
-            returned_sheet.delete_rows(i+2)
-            st.success(f"✅ تم حذف {row['Order Number']} من الإرجاع")
+    st.dataframe(df_returned, use_container_width=True)
 else:
     st.info("لا توجد شحنات تم إرجاعها حالياً.")
 
