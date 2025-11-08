@@ -25,27 +25,33 @@ POLICY_SHEET = "Policy number"
 DELIVERED_SHEET = "تم التسليم"
 RETURNED_SHEET = "تم الإرجاع"
 ORDERS_SHEET = "Order Number"
-ARCHIVE_DELIVERED = "Archived Delivered"
-ARCHIVE_RETURNED = "Archived Returned"
+DELIVERED_ARCHIVE = "Delivered Archive"
+RETURNED_ARCHIVE = "Returned Archive"
 
-# ====== تحميل أو إنشاء الشيتات ======
+# ====== تحميل ورقة Policy number ======
+policy_sheet = client.open(SHEET_NAME).worksheet(POLICY_SHEET)
+
+# ====== إنشاء/تحميل شيت مع التعامل مع عدم وجوده ======
 def get_or_create_sheet(sheet_name):
     try:
         sheet = client.open(SHEET_NAME).worksheet(sheet_name)
         return sheet
     except gspread.exceptions.WorksheetNotFound:
-        sheet = client.open(SHEET_NAME).add_worksheet(title=sheet_name, rows="100", cols="10")
-        sheet.append_row(["Order Number", "Policy Number", "Date", "Status", "Days Since Shipment"])
-        return sheet
+        try:
+            sheet = client.open(SHEET_NAME).add_worksheet(title=sheet_name, rows="100", cols="10")
+            sheet.append_row(["Order Number", "Policy Number", "Date", "Status", "Days Since Shipment"])
+            return sheet
+        except gspread.exceptions.APIError as e:
+            st.error(f"❌ لا يمكن إنشاء الورقة '{sheet_name}': {e}")
+            st.stop()
 
-policy_sheet = get_or_create_sheet(POLICY_SHEET)
 delivered_sheet = get_or_create_sheet(DELIVERED_SHEET)
 returned_sheet = get_or_create_sheet(RETURNED_SHEET)
-archive_delivered_sheet = get_or_create_sheet(ARCHIVE_DELIVERED)
-archive_returned_sheet = get_or_create_sheet(ARCHIVE_RETURNED)
-order_sheet = get_or_create_sheet(ORDERS_SHEET)
+delivered_archive_sheet = get_or_create_sheet(DELIVERED_ARCHIVE)
+returned_archive_sheet = get_or_create_sheet(RETURNED_ARCHIVE)
 
-# ====== تحميل بيانات شيت Order Number ======
+# ====== تحميل شيت Order Number ======
+order_sheet = client.open(SHEET_NAME).worksheet(ORDERS_SHEET)
 order_data = order_sheet.get_all_values()
 order_dict = {row[1]: row[3] for row in order_data[1:] if len(row) > 3 and row[3].strip()}
 
@@ -102,7 +108,7 @@ def get_aramex_status(awb_number):
     except Exception as e:
         return f"⚠️ خطأ في جلب الحالة: {e}"
 
-# ====== تحميل بيانات Policy number ======
+# ====== تحميل بيانات الشيت ======
 policy_data = policy_sheet.get_all_values()
 
 # ====== تحديث أيام الشحن وحالة الشحن ======
@@ -160,7 +166,7 @@ if st.button("تحديث جميع الحالات الآن"):
     policy_sheet.update_cells(cells)
     st.success("✅ تم تحديث جميع الحالات")
 
-# ====== تصنيف البيانات ======
+# ====== تصحيح الصفوف قبل إنشاء DataFrame ======
 def normalize_rows(data, num_columns):
     normalized = []
     for row in data:
@@ -169,39 +175,63 @@ def normalize_rows(data, num_columns):
         normalized.append(row)
     return normalized
 
+# ====== تصنيف البيانات لعرضها ======
 delayed_shipments = [row for row in policy_data[1:] if int(row[4]) > 3 and row[3].strip().lower() not in ["delivered", "تم التسليم", "returned", "تم الإرجاع", "shipment charges paid"]]
 current_shipments = [row for row in policy_data[1:] if int(row[4]) <= 3 and row[3].strip().lower() not in ["delivered", "تم التسليم", "returned", "تم الإرجاع", "shipment charges paid"]]
 delayed_shipments = normalize_rows(delayed_shipments, 6)
 current_shipments = normalize_rows(current_shipments, 6)
 
-# ====== تحديث Delivered و Returned ======
-delivered_shipments = [row for row in delivered_sheet.get_all_values()[1:]]
-returned_shipments = [row for row in returned_sheet.get_all_values()[1:]]
-
+# ====== دالة لإضافة الصفوف في دفعات لتجنب تجاوز الكوتا ======
 def append_in_batches(sheet, rows, batch_size=20):
     for i in range(0, len(rows), batch_size):
-        sheet.append_rows(rows[i:i+batch_size], value_input_option='USER_ENTERED')
+        batch = rows[i:i+batch_size]
+        sheet.append_rows(batch, value_input_option='USER_ENTERED')
         time.sleep(1)
+
+# ====== تحديث تبويبات التسليم والإرجاع والأرشيف ======
+delivered_shipments = [row for row in delivered_sheet.get_all_values()[1:]]
+returned_shipments = [row for row in returned_sheet.get_all_values()[1:]]
 
 new_delivered = [row[:5] for row in policy_data[1:] if row[3].strip().lower() in ["delivered", "تم التسليم", "shipment charges paid"] and row[1] not in [r[1] for r in delivered_shipments]]
 new_returned = [row[:5] for row in policy_data[1:] if row[3].strip().lower() in ["returned", "تم الإرجاع"] and row[1] not in [r[1] for r in returned_shipments]]
 
-if new_delivered: append_in_batches(delivered_sheet, new_delivered); delivered_shipments.extend(new_delivered)
-if new_returned: append_in_batches(returned_sheet, new_returned); returned_shipments.extend(new_returned)
+if new_delivered:
+    try:
+        append_in_batches(delivered_sheet, new_delivered)
+        append_in_batches(delivered_archive_sheet, new_delivered)
+        # إزالة الصفوف من البيانات الرئيسية
+        for row in new_delivered:
+            for i, r in enumerate(policy_data[1:], start=2):
+                if r[1] == row[1]:
+                    policy_sheet.delete_rows(i)
+                    break
+    except gspread.exceptions.APIError as e:
+        st.error(f"❌ خطأ عند إضافة الشحنات إلى التسليم: {e}")
+
+if new_returned:
+    try:
+        append_in_batches(returned_sheet, new_returned)
+        append_in_batches(returned_archive_sheet, new_returned)
+        # إزالة الصفوف من البيانات الرئيسية
+        for row in new_returned:
+            for i, r in enumerate(policy_data[1:], start=2):
+                if r[1] == row[1]:
+                    policy_sheet.delete_rows(i)
+                    break
+    except gspread.exceptions.APIError as e:
+        st.error(f"❌ خطأ عند إضافة الشحنات إلى الإرجاع: {e}")
 
 # ====== عرض الجداول ======
 st.markdown("---")
 st.subheader("الشحنات المتأخرة")
-st.dataframe(pd.DataFrame(delayed_shipments, columns=["Order Number","Policy Number","Date","Status","Days Since Shipment","حالة الشحن"]), use_container_width=True) if delayed_shipments else st.info("لا توجد شحنات متأخرة حالياً.")
-
-st.markdown("---")
-st.subheader("✅ الشحنات التي تم توصيلها")
-st.dataframe(pd.DataFrame(delivered_shipments, columns=["Order Number","Policy Number","Date","Status","Days Since Shipment"]), use_container_width=True) if delivered_shipments else st.info("لا توجد شحنات تم توصيلها حالياً.")
-
-st.markdown("---")
-st.subheader("📤 الشحنات التي تم إرجاعها")
-st.dataframe(pd.DataFrame(returned_shipments, columns=["Order Number","Policy Number","Date","Status","Days Since Shipment"]), use_container_width=True) if returned_shipments else st.info("لا توجد شحنات تم إرجاعها حالياً.")
+if delayed_shipments:
+    st.dataframe(pd.DataFrame(delayed_shipments, columns=["Order Number","Policy Number","Date","Status","Days Since Shipment","حالة الشحن"]), use_container_width=True)
+else:
+    st.info("لا توجد شحنات متأخرة حالياً.")
 
 st.markdown("---")
 st.subheader("📦 الشحنات الحالية")
-st.dataframe(pd.DataFrame(current_shipments, columns=["Order Number","Policy Number","Date","Status","Days Since Shipment","حالة الشحن"]), use_container_width=True) if current_shipments else st.info("لا توجد شحنات حالياً.")
+if current_shipments:
+    st.dataframe(pd.DataFrame(current_shipments, columns=["Order Number","Policy Number","Date","Status","Days Since Shipment","حالة الشحن"]), use_container_width=True)
+else:
+    st.info("لا توجد شحنات حالياً.")
