@@ -7,6 +7,7 @@ import requests
 import xml.etree.ElementTree as ET
 import re
 from streamlit_autorefresh import st_autorefresh
+import pandas as pd
 
 # ====== تحديث تلقائي كل 10 دقائق ======
 st_autorefresh(interval=600000, key="auto_refresh")
@@ -20,6 +21,7 @@ client = gspread.authorize(creds)
 # ====== اسم ملف Google Sheet ======
 SHEET_NAME = "Complaints"
 POLICY_SHEET = "Policy number"
+DELIVERED_SHEET = "تم التسليم"
 
 # ====== الوصول إلى ورقة Policy number ======
 try:
@@ -87,7 +89,14 @@ try:
 except Exception:
     policy_data = []
 
-# ====== تحديث حالات الأيام ======
+# ====== إنشاء/تحميل تبويب "تم التسليم" ======
+try:
+    delivered_sheet = client.open(SHEET_NAME).worksheet(DELIVERED_SHEET)
+except gspread.exceptions.WorksheetNotFound:
+    delivered_sheet = client.open(SHEET_NAME).add_worksheet(title=DELIVERED_SHEET, rows="100", cols="10")
+    delivered_sheet.append_row(["Order Number", "Policy Number", "Date", "Status", "Days Since Shipment"])
+
+# ====== تحديث أيام الشحن ======
 for idx, row in enumerate(policy_data[1:], start=2):
     if len(row) < 5:
         row += ["0"] * (5 - len(row))
@@ -107,29 +116,71 @@ for idx, row in enumerate(policy_data[1:], start=2):
     except:
         pass
 
-# ====== تحديث جميع الحالات من Aramex ======
+# ====== البحث عن شحنة ======
+st.header("🔍 البحث عن شحنة")
+search_order = st.text_input("أدخل رقم الطلب للبحث")
+
+if search_order.strip():
+    found = False
+    for i, row in enumerate(policy_data[1:], start=2):
+        if len(row) >= 2 and str(row[0]) == search_order:
+            found = True
+            policy_number = row[1]
+            date_added = row[2] if len(row) > 2 else "—"
+            status = row[3] if len(row) > 3 else "—"
+            days_since = row[4] if len(row) > 4 else "—"
+
+            st.success(f"✅ تم العثور على الطلب رقم: {search_order}")
+            st.info(f"📦 رقم الشحنة: {policy_number}")
+            st.write(f"📅 التاريخ: {date_added}")
+            st.write(f"🔄 الحالة الحالية: {status}")
+            st.write(f"⏳ أيام منذ الشحن: {days_since}")
+
+            if policy_number.strip() and status.lower() != "delivered":
+                new_status = get_aramex_status(policy_number)
+                if new_status and new_status != status:
+                    try:
+                        policy_sheet.update_cell(i, 4, new_status)
+                        st.success(f"✅ تم تحديث الحالة إلى: {new_status}")
+                        row[3] = new_status
+                    except Exception as e:
+                        st.error(f"⚠️ لم يتم تحديث الحالة: {e}")
+            break
+    if not found:
+        st.error("⚠️ لم يتم العثور على الطلب في الشيت")
+
+# ====== تحديث جميع الحالات ======
 if st.button("تحديث جميع الحالات الآن"):
-    import time
     progress = st.progress(0)
     for idx, row in enumerate(policy_data[1:], start=2):
         if len(row) >= 2 and row[1].strip():
-            new_status = get_aramex_status(row[1])
-            row[3] = new_status
-            try:
-                policy_sheet.update_cell(idx, 4, new_status)
-            except:
-                pass
+            if row[3].strip().lower() != "delivered":
+                new_status = get_aramex_status(row[1])
+                row[3] = new_status
+                try:
+                    policy_sheet.update_cell(idx, 4, new_status)
+                except:
+                    pass
         progress.progress(idx / len(policy_data))
     st.success("✅ تم تحديث جميع الحالات")
 
 # ====== تصنيف البيانات ======
-delayed_shipments = [row for row in policy_data[1:] if int(row[4]) > 3]
-delivered_shipments = [row for row in policy_data[1:] if row[3].strip().lower() == "delivered"]
+delayed_shipments = [row for row in policy_data[1:] if int(row[4]) > 3 and row[3].strip().lower() != "delivered"]
+delivered_shipments = [row for row in delivered_sheet.get_all_values()[1:]]  # من تبويب التسليم
 current_shipments = [row for row in policy_data[1:] if int(row[4]) <= 3 and row[3].strip().lower() != "delivered"]
+
+# ====== تحديث تبويب "تم التسليم" تلقائياً ======
+for row in policy_data[1:]:
+    if row[3].strip().lower() == "delivered":
+        # تحقق إذا موجود مسبقًا لتجنب التكرار
+        existing = [r[1] for r in delivered_shipments]
+        if row[1] not in existing:
+            delivered_sheet.append_row(row[:5])
+            delivered_shipments.append(row)
 
 # ====== عرض الجداول ======
 st.markdown("---")
-st.subheader("⏳ الشحنات المتأخرة (>3 أيام)")
+st.subheader("الشحنات المتأخرة")
 if delayed_shipments:
     st.dataframe(delayed_shipments, use_container_width=True)
 else:
@@ -138,7 +189,13 @@ else:
 st.markdown("---")
 st.subheader("✅ الشحنات التي تم توصيلها")
 if delivered_shipments:
-    st.dataframe(delivered_shipments, use_container_width=True)
+    df_delivered = pd.DataFrame(delivered_shipments, columns=["Order Number","Policy Number","Date","Status","Days Since Shipment"])
+    # زر حذف لكل سجل
+    for i, row in df_delivered.iterrows():
+        st.write(row.to_dict())
+        if st.button(f"حذف {row['Order Number']}"):
+            delivered_sheet.delete_rows(i+2)  # +2 بسبب العنوان وindex 0
+            st.success(f"✅ تم حذف {row['Order Number']}")
 else:
     st.info("لا توجد شحنات تم توصيلها حالياً.")
 
