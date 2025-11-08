@@ -162,7 +162,7 @@ if st.button("تحديث جميع الحالات الآن"):
     progress = st.progress(0)
     for idx, row in enumerate(policy_data[1:], start=2):
         if len(row) >= 2 and row[1].strip():
-            if row[3].strip().lower() not in ["delivered", "تم التسليم", "returned", "تم الإرجاع"]:
+            if row[3].strip().lower() not in ["delivered", "تم التسليم", "returned", "تم الإرجاع", "shipment charges paid"]:
                 new_status = get_aramex_status(row[1])
                 row[3] = new_status
                 try:
@@ -182,8 +182,8 @@ def normalize_rows(data, num_columns):
     return normalized
 
 # ====== تصنيف البيانات لعرضها ======
-delayed_shipments = [row for row in policy_data[1:] if int(row[4]) > 3 and row[3].strip().lower() not in ["delivered", "تم التسليم", "returned", "تم الإرجاع"]]
-current_shipments = [row for row in policy_data[1:] if int(row[4]) <= 3 and row[3].strip().lower() not in ["delivered", "تم التسليم", "returned", "تم الإرجاع"]]
+delayed_shipments = [row for row in policy_data[1:] if int(row[4]) > 3 and row[3].strip().lower() not in ["delivered", "تم التسليم", "returned", "تم الإرجاع", "shipment charges paid"]]
+current_shipments = [row for row in policy_data[1:] if int(row[4]) <= 3 and row[3].strip().lower() not in ["delivered", "تم التسليم", "returned", "تم الإرجاع", "shipment charges paid"]]
 delayed_shipments = normalize_rows(delayed_shipments, 6)
 current_shipments = normalize_rows(current_shipments, 6)
 
@@ -191,7 +191,8 @@ current_shipments = normalize_rows(current_shipments, 6)
 delivered_shipments = [row for row in delivered_sheet.get_all_values()[1:]]
 returned_shipments = [row for row in returned_sheet.get_all_values()[1:]]
 
-new_delivered = [row[:5] for row in policy_data[1:] if row[3].strip().lower() in ["delivered", "تم التسليم"] and row[1] not in [r[1] for r in delivered_shipments]]
+# اعتبار "Shipment charges paid" كـ تم التسليم أيضًا
+new_delivered = [row[:5] for row in policy_data[1:] if row[3].strip().lower() in ["delivered", "تم التسليم", "shipment charges paid"] and row[1] not in [r[1] for r in delivered_shipments]]
 new_returned = [row[:5] for row in policy_data[1:] if row[3].strip().lower() in ["returned", "تم الإرجاع"] and row[1] not in [r[1] for r in returned_shipments]]
 
 if new_delivered:
