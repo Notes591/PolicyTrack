@@ -157,10 +157,17 @@ def update_special_sheets():
             status = row[3].strip()
             date_added_str = row[2] if len(row) > 2 else None
 
-            # حساب عدد الأيام منذ الشحنة
+            # حساب عدد الأيام منذ الشحنة مع دعم صيغ YYYY-MM-DD و YYYY/MM/DD
             if date_added_str and date_added_str.strip():
                 try:
-                    date_added = datetime.strptime(date_added_str, "%Y-%m-%d")
+                    for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+                        try:
+                            date_added = datetime.strptime(date_added_str, fmt)
+                            break
+                        except:
+                            continue
+                    else:
+                        continue  # تجاهل إذا لم تنجح أي صيغة
                     days_diff = (datetime.now() - date_added).days
                     row[4] = days_diff
                     policy_sheet.update_cell(idx, 5, days_diff)
