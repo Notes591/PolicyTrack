@@ -132,6 +132,29 @@ if search_order.strip():
 st.markdown("---")
 st.header("🔄 تحديث تلقائي لكل الشحنات")
 
+def update_status_sheets():
+    """توزيع الشحنات على تبويبات حسب الحالة"""
+    for idx, row in enumerate(policy_data[1:], start=2):
+        if len(row) >= 4:
+            policy_number = row[1]
+            status = row[3]  # العمود الرابع = الحالة
+            if not status.strip():
+                continue
+            try:
+                # تحقق إذا كان هناك ورقة باسم الحالة، إذا لا توجد أنشئها
+                try:
+                    status_sheet = client.open(SHEET_NAME).worksheet(status)
+                except gspread.exceptions.WorksheetNotFound:
+                    status_sheet = client.open(SHEET_NAME).add_worksheet(title=status, rows="100", cols="10")
+                    status_sheet.append_row(["Order Number", "Policy Number", "Date Added", "Status"])
+                
+                # أضف الشحنة في ورقة الحالة إذا لم تكن موجودة مسبقًا
+                existing_orders = status_sheet.col_values(1)  # عمود رقم الطلب
+                if row[0] not in existing_orders:
+                    status_sheet.append_row(row[:4])
+            except Exception as e:
+                st.error(f"⚠️ خطأ أثناء تحديث تبويب الحالة {status}: {e}")
+
 if st.button("تحديث جميع الحالات الآن"):
     if len(policy_data) <= 1:
         st.warning("❌ لا توجد بيانات لتحديثها")
@@ -146,10 +169,13 @@ if st.button("تحديث جميع الحالات الآن"):
                     try:
                         policy_sheet.update_cell(idx, 4, status)
                         updated_count += 1
+                        policy_data[idx-1][3] = status  # تحديث البيانات محليًا
                     except gspread.exceptions.APIError:
                         time.sleep(1)
             progress.progress(idx / len(policy_data))
         st.success(f"✅ تم تحديث {updated_count} شحنة بنجاح")
+        # تحديث تبويبات الحالات
+        update_status_sheets()
 
 # ====== عرض كل البيانات ======
 st.markdown("---")
