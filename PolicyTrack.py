@@ -155,7 +155,7 @@ if st.button("تحديث جميع الحالات الآن"):
     progress = st.progress(0)
     for idx, row in enumerate(policy_data[1:], start=2):
         if len(row) >= 2 and row[1].strip():
-            if row[3].strip().lower() not in ["delivered", "تم التسليم", "returned", "تم الإرجاع", "shipment charges paid"]:
+            if row[3].strip().lower() not in ["delivered", "تم التسليم", "returned", "تم الإرجاع", "shipment charges paid", "customer id received", "collected by consignee", "returned to shipper"]:
                 new_status = get_aramex_status(row[1])
                 row[3] = new_status
         progress.progress(idx / len(policy_data))
@@ -176,8 +176,8 @@ def normalize_rows(data, num_columns):
     return normalized
 
 # ====== تصنيف البيانات لعرضها ======
-delayed_shipments = [row for row in policy_data[1:] if int(row[4]) > 3 and row[3].strip().lower() not in ["delivered", "تم التسليم", "returned", "تم الإرجاع", "shipment charges paid"]]
-current_shipments = [row for row in policy_data[1:] if int(row[4]) <= 3 and row[3].strip().lower() not in ["delivered", "تم التسليم", "returned", "تم الإرجاع", "shipment charges paid"]]
+delayed_shipments = [row for row in policy_data[1:] if int(row[4]) > 3 and row[3].strip().lower() not in ["delivered","تم التسليم","shipment charges paid","customer id received","collected by consignee","returned","تم الإرجاع","returned to shipper"]]
+current_shipments = [row for row in policy_data[1:] if int(row[4]) <= 3 and row[3].strip().lower() not in ["delivered","تم التسليم","shipment charges paid","customer id received","collected by consignee","returned","تم الإرجاع","returned to shipper"]]
 delayed_shipments = normalize_rows(delayed_shipments, 6)
 current_shipments = normalize_rows(current_shipments, 6)
 
@@ -192,8 +192,13 @@ def append_in_batches(sheet, rows, batch_size=20):
 delivered_shipments = [row for row in delivered_sheet.get_all_values()[1:]]
 returned_shipments = [row for row in returned_sheet.get_all_values()[1:]]
 
-new_delivered = [row[:5] for row in policy_data[1:] if row[3].strip().lower() in ["delivered", "تم التسليم", "shipment charges paid"] and row[1] not in [r[1] for r in delivered_shipments]]
-new_returned = [row[:5] for row in policy_data[1:] if row[3].strip().lower() in ["returned", "تم الإرجاع"] and row[1] not in [r[1] for r in returned_shipments]]
+# الحالات التي تعتبر ديلفريد
+delivered_conditions = ["delivered","تم التسليم","shipment charges paid","customer id received","collected by consignee"]
+# الحالات التي تعتبر مرتجع
+returned_conditions = ["returned","تم الإرجاع","returned to shipper"]
+
+new_delivered = [row[:5] for row in policy_data[1:] if row[3].strip().lower() in delivered_conditions and row[1] not in [r[1] for r in delivered_shipments]]
+new_returned = [row[:5] for row in policy_data[1:] if row[3].strip().lower() in returned_conditions and row[1] not in [r[1] for r in returned_shipments]]
 
 if new_delivered:
     try:
@@ -221,7 +226,7 @@ if new_returned:
     except gspread.exceptions.APIError as e:
         st.error(f"❌ خطأ عند إضافة الشحنات إلى الإرجاع: {e}")
 
-# ====== عرض الجداول ======
+# ====== عرض الجداول في Streamlit ======
 st.markdown("---")
 st.subheader("الشحنات المتأخرة")
 if delayed_shipments:
