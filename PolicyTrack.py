@@ -22,10 +22,17 @@ client = gspread.authorize(creds)
 SHEET_NAME = "Complaints"
 POLICY_SHEET = "Policy number"
 DELIVERED_SHEET = "تم التسليم"
-ORDERS_SHEET = "Order Number"  # الشيت الذي يحتوي على رقم الطلب والمندوب
+ORDERS_SHEET = "Order Number"
 
 # ====== تحميل ورقة Policy number ======
 policy_sheet = client.open(SHEET_NAME).worksheet(POLICY_SHEET)
+
+# ====== إنشاء/تحميل تبويب "تم التسليم" ======
+try:
+    delivered_sheet = client.open(SHEET_NAME).worksheet(DELIVERED_SHEET)
+except gspread.exceptions.WorksheetNotFound:
+    delivered_sheet = client.open(SHEET_NAME).add_worksheet(title=DELIVERED_SHEET, rows="100", cols="10")
+    delivered_sheet.append_row(["Order Number", "Policy Number", "Date", "Status", "Days Since Shipment"])
 
 # ====== تحميل شيت Order Number ======
 order_sheet = client.open(SHEET_NAME).worksheet(ORDERS_SHEET)
@@ -91,7 +98,7 @@ policy_data = policy_sheet.get_all_values()
 # ====== تحديث أيام الشحن وحالة الشحن ======
 for idx, row in enumerate(policy_data[1:], start=2):
     if len(row) < 6:
-        row += ["0", "غير معروف"] * (6 - len(row))  # إضافة عمود الأيام وعمود حالة الشحن
+        row += ["0", "غير معروف"] * (6 - len(row))
     # حساب الأيام منذ الشحنة
     date_added_str = row[2] if len(row) > 2 else None
     days_diff = 0
@@ -140,9 +147,33 @@ if search_order.strip():
     if not found:
         st.error("⚠️ لم يتم العثور على الطلب في الشيت")
 
+# ====== تحديث جميع الحالات ======
+if st.button("تحديث جميع الحالات الآن"):
+    progress = st.progress(0)
+    for idx, row in enumerate(policy_data[1:], start=2):
+        if len(row) >= 2 and row[1].strip():
+            if row[3].strip().lower() != "delivered":
+                new_status = get_aramex_status(row[1])
+                row[3] = new_status
+                try:
+                    policy_sheet.update_cell(idx, 4, new_status)
+                except:
+                    pass
+        progress.progress(idx / len(policy_data))
+    st.success("✅ تم تحديث جميع الحالات")
+
 # ====== تصنيف البيانات لعرضها ======
 delayed_shipments = [row for row in policy_data[1:] if int(row[4]) > 3 and row[3].strip().lower() != "delivered"]
 current_shipments = [row for row in policy_data[1:] if int(row[4]) <= 3 and row[3].strip().lower() != "delivered"]
+
+# ====== تحديث تبويب "تم التسليم" تلقائياً ======
+delivered_shipments = [row for row in delivered_sheet.get_all_values()[1:]]  # من تبويب التسليم
+for row in policy_data[1:]:
+    if row[3].strip().lower() == "delivered":
+        existing = [r[1] for r in delivered_shipments]
+        if row[1] not in existing:
+            delivered_sheet.append_row(row[:5])
+            delivered_shipments.append(row)
 
 # ====== عرض الجداول ======
 st.markdown("---")
@@ -151,6 +182,18 @@ if delayed_shipments:
     st.dataframe(pd.DataFrame(delayed_shipments, columns=["Order Number","Policy Number","Date","Status","Days Since Shipment","حالة الشحن"]), use_container_width=True)
 else:
     st.info("لا توجد شحنات متأخرة حالياً.")
+
+st.markdown("---")
+st.subheader("✅ الشحنات التي تم توصيلها")
+if delivered_shipments:
+    df_delivered = pd.DataFrame(delivered_shipments, columns=["Order Number","Policy Number","Date","Status","Days Since Shipment"])
+    for i, row in df_delivered.iterrows():
+        st.write(row.to_dict())
+        if st.button(f"حذف {row['Order Number']}"):
+            delivered_sheet.delete_rows(i+2)
+            st.success(f"✅ تم حذف {row['Order Number']}")
+else:
+    st.info("لا توجد شحنات تم توصيلها حالياً.")
 
 st.markdown("---")
 st.subheader("📦 الشحنات الحالية")
