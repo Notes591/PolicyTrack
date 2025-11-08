@@ -3,12 +3,10 @@ import streamlit as st
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 from datetime import datetime
-import time
 import requests
 import xml.etree.ElementTree as ET
 import re
 from streamlit_autorefresh import st_autorefresh
-import gspread.exceptions
 
 # ====== تحديث تلقائي كل 10 دقائق ======
 st_autorefresh(interval=600000, key="auto_refresh")
@@ -89,131 +87,64 @@ try:
 except Exception:
     policy_data = []
 
-# ====== البحث ======
-st.header("🔍 البحث عن شحنة")
-search_order = st.text_input("أدخل رقم الطلب للبحث")
-
-if search_order.strip():
-    found = False
-    for i, row in enumerate(policy_data[1:], start=2):
-        if len(row) >= 2 and str(row[0]) == search_order:
-            found = True
-            policy_number = row[1]
-            date_added = row[2] if len(row) > 2 else "—"
-            status = row[3] if len(row) > 3 else "—"
-            days_since = row[4] if len(row) > 4 else "—"
-
-            st.success(f"✅ تم العثور على الطلب رقم: {search_order}")
-            st.info(f"📦 رقم الشحنة: {policy_number}")
-            st.write(f"📅 التاريخ: {date_added}")
-            st.write(f"🔄 الحالة الحالية: {status}")
-            st.write(f"⏳ أيام منذ الشحن: {days_since}")
-
-            if policy_number.strip():
-                new_status = get_aramex_status(policy_number)
-                if new_status and new_status != status:
-                    try:
-                        policy_sheet.update_cell(i, 4, new_status)
-                        row[3] = new_status
-                        st.success(f"✅ تم تحديث الحالة إلى: {new_status}")
-                    except Exception as e:
-                        st.error(f"⚠️ لم يتم تحديث الحالة: {e}")
-            break
-
-    if not found:
-        st.error("⚠️ لم يتم العثور على الطلب في الشيت")
-
-# ====== تحديث الشحنات + التبويبات ======
-st.markdown("---")
-st.header("🔄 تحديث جميع الشحنات")
-
-def update_special_sheets():
-    delayed_name = "متأخرة"
-    delivered_name = "تم التسليم"
-
-    try:
-        # إنشاء/مسح تبويب المتأخرة
-        try:
-            delayed_sheet = client.open(SHEET_NAME).worksheet(delayed_name)
-            delayed_sheet.clear()
-            delayed_sheet.append_row(["Order Number", "Policy Number", "Date Added", "Status", "Days Since Shipment"])
-        except gspread.exceptions.WorksheetNotFound:
-            delayed_sheet = client.open(SHEET_NAME).add_worksheet(title=delayed_name, rows="100", cols="10")
-            delayed_sheet.append_row(["Order Number", "Policy Number", "Date Added", "Status", "Days Since Shipment"])
-        
-        # إنشاء/مسح تبويب التسليم
-        try:
-            delivered_sheet = client.open(SHEET_NAME).worksheet(delivered_name)
-            delivered_sheet.clear()
-            delivered_sheet.append_row(["Order Number", "Policy Number", "Date Added", "Status", "Days Since Shipment"])
-        except gspread.exceptions.WorksheetNotFound:
-            delivered_sheet = client.open(SHEET_NAME).add_worksheet(title=delivered_name, rows="100", cols="10")
-            delivered_sheet.append_row(["Order Number", "Policy Number", "Date Added", "Status", "Days Since Shipment"])
-
-        # تحديث البيانات
-        for idx, row in enumerate(policy_data[1:], start=2):
-            if len(row) < 5:
-                row.append(0)  # عمود الأيام
-            status = row[3].strip()
-            date_added_str = row[2] if len(row) > 2 else None
-
-            # حساب عدد الأيام منذ الشحنة مع دعم صيغ YYYY-MM-DD و YYYY/MM/DD
-            if date_added_str and date_added_str.strip():
-                try:
-                    for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
-                        try:
-                            date_added = datetime.strptime(date_added_str, fmt)
-                            break
-                        except:
-                            continue
-                    else:
-                        continue  # تجاهل إذا لم تنجح أي صيغة
-                    days_diff = (datetime.now() - date_added).days
-                    row[4] = days_diff
-                    policy_sheet.update_cell(idx, 5, days_diff)
-                except:
-                    pass
-
-            # الشحنات التي وصلت
-            if status.lower() == "delivered":
-                delivered_sheet.append_row(row[:5])
+# ====== تحديث حالات الأيام ======
+for idx, row in enumerate(policy_data[1:], start=2):
+    if len(row) < 5:
+        row += ["0"] * (5 - len(row))
+    date_added_str = row[2] if len(row) > 2 else None
+    days_diff = 0
+    if date_added_str and date_added_str.strip():
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d"):
+            try:
+                date_added = datetime.strptime(date_added_str, fmt)
+                days_diff = (datetime.now() - date_added).days
+                break
+            except:
                 continue
+    row[4] = days_diff
+    try:
+        policy_sheet.update_cell(idx, 5, days_diff)
+    except:
+        pass
 
-            # الشحنات المتأخرة
-            if date_added_str:
-                try:
-                    if row[4] > 3:
-                        delayed_sheet.append_row(row[:5])
-                except:
-                    continue
-    except Exception as e:
-        st.error(f"⚠️ خطأ أثناء تحديث التبويبات: {e}")
-
+# ====== تحديث جميع الحالات من Aramex ======
 if st.button("تحديث جميع الحالات الآن"):
-    if len(policy_data) <= 1:
-        st.warning("❌ لا توجد بيانات لتحديثها")
-    else:
-        progress = st.progress(0)
-        updated_count = 0
-        for idx, row in enumerate(policy_data[1:], start=2):
-            if len(row) >= 2:
-                policy_number = row[1]
-                if policy_number.strip():
-                    status = get_aramex_status(policy_number)
-                    try:
-                        policy_sheet.update_cell(idx, 4, status)
-                        row[3] = status
-                        updated_count += 1
-                    except gspread.exceptions.APIError:
-                        time.sleep(1)
-            progress.progress(idx / len(policy_data))
-        st.success(f"✅ تم تحديث {updated_count} شحنة بنجاح")
-        update_special_sheets()
+    import time
+    progress = st.progress(0)
+    for idx, row in enumerate(policy_data[1:], start=2):
+        if len(row) >= 2 and row[1].strip():
+            new_status = get_aramex_status(row[1])
+            row[3] = new_status
+            try:
+                policy_sheet.update_cell(idx, 4, new_status)
+            except:
+                pass
+        progress.progress(idx / len(policy_data))
+    st.success("✅ تم تحديث جميع الحالات")
 
-# ====== عرض كل البيانات ======
+# ====== تصنيف البيانات ======
+delayed_shipments = [row for row in policy_data[1:] if int(row[4]) > 3]
+delivered_shipments = [row for row in policy_data[1:] if row[3].strip().lower() == "delivered"]
+current_shipments = [row for row in policy_data[1:] if int(row[4]) <= 3 and row[3].strip().lower() != "delivered"]
+
+# ====== عرض الجداول ======
 st.markdown("---")
-st.header("📋 جميع الشحنات المسجلة")
-if len(policy_data) > 1:
-    st.dataframe(policy_data[1:], use_container_width=True)
+st.subheader("⏳ الشحنات المتأخرة (>3 أيام)")
+if delayed_shipments:
+    st.dataframe(delayed_shipments, use_container_width=True)
 else:
-    st.info("لا توجد بيانات في الشيت حالياً.")
+    st.info("لا توجد شحنات متأخرة حالياً.")
+
+st.markdown("---")
+st.subheader("✅ الشحنات التي تم توصيلها")
+if delivered_shipments:
+    st.dataframe(delivered_shipments, use_container_width=True)
+else:
+    st.info("لا توجد شحنات تم توصيلها حالياً.")
+
+st.markdown("---")
+st.subheader("📦 الشحنات الحالية")
+if current_shipments:
+    st.dataframe(current_shipments, use_container_width=True)
+else:
+    st.info("لا توجد شحنات حالياً.")
