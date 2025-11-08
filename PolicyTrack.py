@@ -22,17 +22,23 @@ client = gspread.authorize(creds)
 SHEET_NAME = "Complaints"
 POLICY_SHEET = "Policy number"
 DELIVERED_SHEET = "تم التسليم"
+RETURNED_SHEET = "تم الإرجاع"
 ORDERS_SHEET = "Order Number"
 
 # ====== تحميل ورقة Policy number ======
 policy_sheet = client.open(SHEET_NAME).worksheet(POLICY_SHEET)
 
-# ====== إنشاء/تحميل تبويب "تم التسليم" ======
-try:
-    delivered_sheet = client.open(SHEET_NAME).worksheet(DELIVERED_SHEET)
-except gspread.exceptions.WorksheetNotFound:
-    delivered_sheet = client.open(SHEET_NAME).add_worksheet(title=DELIVERED_SHEET, rows="100", cols="10")
-    delivered_sheet.append_row(["Order Number", "Policy Number", "Date", "Status", "Days Since Shipment"])
+# ====== إنشاء/تحميل تبويبات التسليم والإرجاع ======
+def get_or_create_sheet(sheet_name):
+    try:
+        return client.open(SHEET_NAME).worksheet(sheet_name)
+    except gspread.exceptions.WorksheetNotFound:
+        sheet = client.open(SHEET_NAME).add_worksheet(title=sheet_name, rows="100", cols="10")
+        sheet.append_row(["Order Number", "Policy Number", "Date", "Status", "Days Since Shipment"])
+        return sheet
+
+delivered_sheet = get_or_create_sheet(DELIVERED_SHEET)
+returned_sheet = get_or_create_sheet(RETURNED_SHEET)
 
 # ====== تحميل شيت Order Number ======
 order_sheet = client.open(SHEET_NAME).worksheet(ORDERS_SHEET)
@@ -152,7 +158,7 @@ if st.button("تحديث جميع الحالات الآن"):
     progress = st.progress(0)
     for idx, row in enumerate(policy_data[1:], start=2):
         if len(row) >= 2 and row[1].strip():
-            if row[3].strip().lower() != "delivered":
+            if row[3].strip().lower() not in ["delivered", "تم التسليم", "returned", "تم الإرجاع"]:
                 new_status = get_aramex_status(row[1])
                 row[3] = new_status
                 try:
@@ -172,19 +178,27 @@ def normalize_rows(data, num_columns):
     return normalized
 
 # ====== تصنيف البيانات لعرضها ======
-delayed_shipments = [row for row in policy_data[1:] if int(row[4]) > 3 and row[3].strip().lower() != "delivered"]
-current_shipments = [row for row in policy_data[1:] if int(row[4]) <= 3 and row[3].strip().lower() != "delivered"]
+delayed_shipments = [row for row in policy_data[1:] if int(row[4]) > 3 and row[3].strip().lower() not in ["delivered", "تم التسليم", "returned", "تم الإرجاع"]]
+current_shipments = [row for row in policy_data[1:] if int(row[4]) <= 3 and row[3].strip().lower() not in ["delivered", "تم التسليم", "returned", "تم الإرجاع"]]
 delayed_shipments = normalize_rows(delayed_shipments, 6)
 current_shipments = normalize_rows(current_shipments, 6)
 
-# ====== تحديث تبويب "تم التسليم" تلقائياً ======
-delivered_shipments = [row for row in delivered_sheet.get_all_values()[1:]]  # من تبويب التسليم
+# ====== تحديث تبويبات التسليم والإرجاع تلقائياً ======
+delivered_shipments = [row for row in delivered_sheet.get_all_values()[1:]]
+returned_shipments = [row for row in returned_sheet.get_all_values()[1:]]
+
 for row in policy_data[1:]:
-    if row[3].strip().lower() == "delivered":
+    status_lower = row[3].strip().lower()
+    if status_lower in ["delivered", "تم التسليم"]:
         existing = [r[1] for r in delivered_shipments]
         if row[1] not in existing:
             delivered_sheet.append_row(row[:5])
             delivered_shipments.append(row)
+    elif status_lower in ["returned", "تم الإرجاع"]:
+        existing = [r[1] for r in returned_shipments]
+        if row[1] not in existing:
+            returned_sheet.append_row(row[:5])
+            returned_shipments.append(row)
 
 # ====== عرض الجداول ======
 st.markdown("---")
@@ -200,11 +214,23 @@ if delivered_shipments:
     df_delivered = pd.DataFrame(delivered_shipments, columns=["Order Number","Policy Number","Date","Status","Days Since Shipment"])
     for i, row in df_delivered.iterrows():
         st.write(row.to_dict())
-        if st.button(f"حذف {row['Order Number']}"):
+        if st.button(f"حذف {row['Order Number']} من التسليم"):
             delivered_sheet.delete_rows(i+2)
-            st.success(f"✅ تم حذف {row['Order Number']}")
+            st.success(f"✅ تم حذف {row['Order Number']} من التسليم")
 else:
     st.info("لا توجد شحنات تم توصيلها حالياً.")
+
+st.markdown("---")
+st.subheader("📤 الشحنات التي تم إرجاعها")
+if returned_shipments:
+    df_returned = pd.DataFrame(returned_shipments, columns=["Order Number","Policy Number","Date","Status","Days Since Shipment"])
+    for i, row in df_returned.iterrows():
+        st.write(row.to_dict())
+        if st.button(f"حذف {row['Order Number']} من الإرجاع"):
+            returned_sheet.delete_rows(i+2)
+            st.success(f"✅ تم حذف {row['Order Number']} من الإرجاع")
+else:
+    st.info("لا توجد شحنات تم إرجاعها حالياً.")
 
 st.markdown("---")
 st.subheader("📦 الشحنات الحالية")
