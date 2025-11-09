@@ -9,9 +9,9 @@ import re
 from streamlit_autorefresh import st_autorefresh
 import pandas as pd
 import time
-from deep_translator import GoogleTranslator  # ✅ مكتبة الترجمة التلقائية
+from deep_translator import GoogleTranslator  # مكتبة الترجمة التلقائية
 
-# ====== إعداد صفحة Streamlit (يجب أن يكون أول شيء بعد import) ======
+# ====== إعداد صفحة Streamlit (أول شيء بعد import) ======
 st.set_page_config(page_title="📦 تتبع الشحنات", page_icon="🚚", layout="wide")
 st.title("🚚 نظام تتبع الشحنات (Policy number)")
 
@@ -77,7 +77,7 @@ def remove_xml_namespaces(xml_str):
     xml_str = re.sub(r'(<\/?)(\w+:)', r'\1', xml_str)
     return xml_str
 
-# ✅ دالة جلب الحالة من أرامكس مع ترجمة تلقائية
+# ====== دالة جلب الحالة من أرامكس مع ترجمة تلقائية ======
 def get_aramex_status(awb_number):
     try:
         headers = {"Content-Type": "application/json"}
@@ -115,6 +115,7 @@ def get_aramex_status(awb_number):
                         desc_ar = GoogleTranslator(source='en', target='ar').translate(desc_en)
                     except Exception:
                         desc_ar = "—"
+                    # دمج الإنجليزية والعربية في العمود Status
                     return f"{desc_en} - {desc_ar}"
 
         return "❌ لا توجد حالة متاحة"
@@ -159,93 +160,3 @@ if search_order.strip():
             st.write(f"📅 التاريخ: {row[2] if len(row) > 2 else '—'}")
             st.write(f"🔄 الحالة الحالية: {row[3] if len(row) > 3 else '—'}")
             st.write(f"⏳ أيام منذ الشحن: {row[4] if len(row) > 4 else '—'}")
-            st.write(f"🚚 حالة الشحن: {row[5] if len(row) > 5 else 'غير معروف'}")
-            break
-    if not found:
-        st.error("⚠️ لم يتم العثور على الطلب في الشيت")
-
-# ====== تحديث جميع الحالات ======
-if st.button("تحديث جميع الحالات الآن"):
-    progress = st.progress(0)
-    for idx, row in enumerate(policy_data[1:], start=2):
-        if len(row) >= 2 and row[1].strip():
-            if row[3].strip().lower() not in ["delivered", "تم التسليم", "returned", "تم الإرجاع", "shipment charges paid", "customer id received", "collected by consignee", "returned to shipper"]:
-                new_status = get_aramex_status(row[1])
-                row[3] = new_status
-        progress.progress(idx / len(policy_data))
-    cells = policy_sheet.range(f'D2:D{len(policy_data)}')
-    for idx, row in enumerate(policy_data[1:]):
-        cells[idx].value = row[3]
-    policy_sheet.update_cells(cells)
-    st.success("✅ تم تحديث جميع الحالات")
-
-# ====== تصحيح الصفوف قبل إنشاء DataFrame ======
-def normalize_rows(data, num_columns):
-    normalized = []
-    for row in data:
-        row = row[:num_columns]
-        row += ["—"] * (num_columns - len(row))
-        normalized.append(row)
-    return normalized
-
-# ====== تصنيف البيانات لعرضها ======
-delayed_shipments = [row for row in policy_data[1:] if int(row[4]) > 3 and row[3].strip().lower() not in ["delivered","تم التسليم","shipment charges paid","customer id received","collected by consignee","returned","تم الإرجاع","returned to shipper"]]
-current_shipments = [row for row in policy_data[1:] if int(row[4]) <= 3 and row[3].strip().lower() not in ["delivered","تم التسليم","shipment charges paid","customer id received","collected by consignee","returned","تم الإرجاع","returned to shipper"]]
-delayed_shipments = normalize_rows(delayed_shipments, 6)
-current_shipments = normalize_rows(current_shipments, 6)
-
-# ====== دالة لإضافة الصفوف في دفعات ======
-def append_in_batches(sheet, rows, batch_size=20):
-    for i in range(0, len(rows), batch_size):
-        batch = rows[i:i+batch_size]
-        sheet.append_rows(batch, value_input_option='USER_ENTERED')
-        time.sleep(1)
-
-# ====== تحديث تبويبات التسليم والإرجاع والأرشيف ======
-delivered_shipments = [row for row in delivered_sheet.get_all_values()[1:]]
-returned_shipments = [row for row in returned_sheet.get_all_values()[1:]]
-
-delivered_conditions = ["delivered","تم التسليم","shipment charges paid","customer id received","collected by consignee"]
-returned_conditions = ["returned","تم الإرجاع","returned to shipper"]
-
-new_delivered = [row[:5] for row in policy_data[1:] if row[3].strip().lower() in delivered_conditions and row[1] not in [r[1] for r in delivered_shipments]]
-new_returned = [row[:5] for row in policy_data[1:] if row[3].strip().lower() in returned_conditions and row[1] not in [r[1] for r in returned_shipments]]
-
-if new_delivered:
-    try:
-        append_in_batches(delivered_sheet, new_delivered)
-        append_in_batches(delivered_archive_sheet, new_delivered)
-        for row in new_delivered:
-            for i, r in enumerate(policy_data[1:], start=2):
-                if r[1] == row[1]:
-                    policy_sheet.delete_rows(i)
-                    break
-    except gspread.exceptions.APIError as e:
-        st.error(f"❌ خطأ عند إضافة الشحنات إلى التسليم: {e}")
-
-if new_returned:
-    try:
-        append_in_batches(returned_sheet, new_returned)
-        append_in_batches(returned_archive_sheet, new_returned)
-        for row in new_returned:
-            for i, r in enumerate(policy_data[1:], start=2):
-                if r[1] == row[1]:
-                    policy_sheet.delete_rows(i)
-                    break
-    except gspread.exceptions.APIError as e:
-        st.error(f"❌ خطأ عند إضافة الشحنات إلى الإرجاع: {e}")
-
-# ====== عرض الجداول ======
-st.markdown("---")
-st.subheader("الشحنات المتأخرة")
-if delayed_shipments:
-    st.dataframe(pd.DataFrame(delayed_shipments, columns=["Order Number","Policy Number","Date","Status","Days Since Shipment","حالة الشحن"]), use_container_width=True)
-else:
-    st.info("لا توجد شحنات متأخرة حالياً.")
-
-st.markdown("---")
-st.subheader("📦 الشحنات الحالية")
-if current_shipments:
-    st.dataframe(pd.DataFrame(current_shipments, columns=["Order Number","Policy Number","Date","Status","Days Since Shipment","حالة الشحن"]), use_container_width=True)
-else:
-    st.info("لا توجد شحنات حالياً.")
