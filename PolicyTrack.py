@@ -9,7 +9,11 @@ import re
 from streamlit_autorefresh import st_autorefresh
 import pandas as pd
 import time
-from deep_translator import GoogleTranslator  # ✅ تمت إضافة المكتبة الجديدة للترجمة التلقائية
+from deep_translator import GoogleTranslator  # ✅ مكتبة الترجمة التلقائية
+
+# ====== إعداد صفحة Streamlit (يجب أن يكون أول شيء بعد import) ======
+st.set_page_config(page_title="📦 تتبع الشحنات", page_icon="🚚", layout="wide")
+st.title("🚚 نظام تتبع الشحنات (Policy number)")
 
 # ====== تحديث تلقائي كل 10 دقائق ======
 st_autorefresh(interval=600000, key="auto_refresh")
@@ -56,10 +60,6 @@ order_sheet = client.open(SHEET_NAME).worksheet(ORDERS_SHEET)
 order_data = order_sheet.get_all_values()
 order_dict = {row[1]: row[3] for row in order_data[1:] if len(row) > 3 and row[3].strip()}
 
-# ====== إعداد صفحة Streamlit ======
-st.set_page_config(page_title="📦 تتبع الشحنات", page_icon="🚚", layout="wide")
-st.title("🚚 نظام تتبع الشحنات (Policy number)")
-
 # ====== بيانات Aramex ======
 client_info = {
     "UserName": "fitnessworld525@gmail.com",
@@ -77,7 +77,7 @@ def remove_xml_namespaces(xml_str):
     xml_str = re.sub(r'(<\/?)(\w+:)', r'\1', xml_str)
     return xml_str
 
-# ✅ دالة جلب الحالة من أرامكس مع ترجمة تلقائية (deep-translator)
+# ✅ دالة جلب الحالة من أرامكس مع ترجمة تلقائية
 def get_aramex_status(awb_number):
     try:
         headers = {"Content-Type": "application/json"}
@@ -111,13 +111,10 @@ def get_aramex_status(awb_number):
                         reverse=True
                     )[0]
                     desc_en = last_track.find('UpdateDescription').text if last_track.find('UpdateDescription') is not None else "—"
-
-                    # ✅ ترجمة تلقائية كاملة باستخدام deep-translator
                     try:
                         desc_ar = GoogleTranslator(source='en', target='ar').translate(desc_en)
                     except Exception:
                         desc_ar = "—"
-
                     return f"{desc_en} - {desc_ar}"
 
         return "❌ لا توجد حالة متاحة"
