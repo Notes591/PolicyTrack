@@ -9,7 +9,7 @@ import re
 from streamlit_autorefresh import st_autorefresh
 import pandas as pd
 import time
-from googletrans import Translator  # ✅ تمت إضافة المترجم التلقائي
+from deep_translator import GoogleTranslator  # ✅ تمت إضافة المكتبة الجديدة للترجمة التلقائية
 
 # ====== تحديث تلقائي كل 10 دقائق ======
 st_autorefresh(interval=600000, key="auto_refresh")
@@ -77,10 +77,7 @@ def remove_xml_namespaces(xml_str):
     xml_str = re.sub(r'(<\/?)(\w+:)', r'\1', xml_str)
     return xml_str
 
-# ✅ المترجم التلقائي
-translator = Translator()
-
-# ====== دالة جلب الحالة من أرامكس مع ترجمة تلقائية ======
+# ✅ دالة جلب الحالة من أرامكس مع ترجمة تلقائية (deep-translator)
 def get_aramex_status(awb_number):
     try:
         headers = {"Content-Type": "application/json"}
@@ -115,15 +112,16 @@ def get_aramex_status(awb_number):
                     )[0]
                     desc_en = last_track.find('UpdateDescription').text if last_track.find('UpdateDescription') is not None else "—"
 
-                    # ترجمة تلقائية
+                    # ✅ ترجمة تلقائية كاملة باستخدام deep-translator
                     try:
-                        desc_ar = translator.translate(desc_en, src='en', dest='ar').text
+                        desc_ar = GoogleTranslator(source='en', target='ar').translate(desc_en)
                     except Exception:
                         desc_ar = "—"
 
                     return f"{desc_en} - {desc_ar}"
 
         return "❌ لا توجد حالة متاحة"
+
     except Exception as e:
         return f"⚠️ خطأ في جلب الحالة: {e}"
 
@@ -178,7 +176,6 @@ if st.button("تحديث جميع الحالات الآن"):
                 new_status = get_aramex_status(row[1])
                 row[3] = new_status
         progress.progress(idx / len(policy_data))
-    # تحديث العمود دفعة واحدة
     cells = policy_sheet.range(f'D2:D{len(policy_data)}')
     for idx, row in enumerate(policy_data[1:]):
         cells[idx].value = row[3]
@@ -200,7 +197,7 @@ current_shipments = [row for row in policy_data[1:] if int(row[4]) <= 3 and row[
 delayed_shipments = normalize_rows(delayed_shipments, 6)
 current_shipments = normalize_rows(current_shipments, 6)
 
-# ====== دالة لإضافة الصفوف في دفعات لتجنب تجاوز الكوتا ======
+# ====== دالة لإضافة الصفوف في دفعات ======
 def append_in_batches(sheet, rows, batch_size=20):
     for i in range(0, len(rows), batch_size):
         batch = rows[i:i+batch_size]
@@ -211,9 +208,7 @@ def append_in_batches(sheet, rows, batch_size=20):
 delivered_shipments = [row for row in delivered_sheet.get_all_values()[1:]]
 returned_shipments = [row for row in returned_sheet.get_all_values()[1:]]
 
-# الحالات التي تعتبر ديلفريد
 delivered_conditions = ["delivered","تم التسليم","shipment charges paid","customer id received","collected by consignee"]
-# الحالات التي تعتبر مرتجع
 returned_conditions = ["returned","تم الإرجاع","returned to shipper"]
 
 new_delivered = [row[:5] for row in policy_data[1:] if row[3].strip().lower() in delivered_conditions and row[1] not in [r[1] for r in delivered_shipments]]
@@ -243,7 +238,7 @@ if new_returned:
     except gspread.exceptions.APIError as e:
         st.error(f"❌ خطأ عند إضافة الشحنات إلى الإرجاع: {e}")
 
-# ====== عرض الجداول في Streamlit ======
+# ====== عرض الجداول ======
 st.markdown("---")
 st.subheader("الشحنات المتأخرة")
 if delayed_shipments:
