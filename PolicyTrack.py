@@ -9,6 +9,7 @@ import re
 from streamlit_autorefresh import st_autorefresh
 import pandas as pd
 import time
+from googletrans import Translator  # ✅ تمت إضافة المترجم التلقائي
 
 # ====== تحديث تلقائي كل 10 دقائق ======
 st_autorefresh(interval=600000, key="auto_refresh")
@@ -76,6 +77,10 @@ def remove_xml_namespaces(xml_str):
     xml_str = re.sub(r'(<\/?)(\w+:)', r'\1', xml_str)
     return xml_str
 
+# ✅ المترجم التلقائي
+translator = Translator()
+
+# ====== دالة جلب الحالة من أرامكس مع ترجمة تلقائية ======
 def get_aramex_status(awb_number):
     try:
         headers = {"Content-Type": "application/json"}
@@ -89,21 +94,35 @@ def get_aramex_status(awb_number):
         response = requests.post(url, json=payload, headers=headers, timeout=10)
         if response.status_code != 200:
             return f"❌ فشل الاتصال ({response.status_code})"
+
         xml_content = response.content.decode('utf-8')
         xml_content = remove_xml_namespaces(xml_content)
         root = ET.fromstring(xml_content)
         tracking_results = root.find('TrackingResults')
         if tracking_results is None or len(tracking_results) == 0:
             return "❌ لا توجد حالة متاحة"
+
         keyvalue = tracking_results.find('KeyValueOfstringArrayOfTrackingResultmFAkxlpY')
         if keyvalue is not None:
             tracking_array = keyvalue.find('Value')
             if tracking_array is not None:
                 tracks = tracking_array.findall('TrackingResult')
                 if tracks:
-                    last_track = sorted(tracks, key=lambda tr: tr.find('UpdateDateTime').text if tr.find('UpdateDateTime') is not None else '', reverse=True)[0]
-                    desc = last_track.find('UpdateDescription').text if last_track.find('UpdateDescription') is not None else "—"
-                    return desc
+                    last_track = sorted(
+                        tracks,
+                        key=lambda tr: tr.find('UpdateDateTime').text if tr.find('UpdateDateTime') is not None else '',
+                        reverse=True
+                    )[0]
+                    desc_en = last_track.find('UpdateDescription').text if last_track.find('UpdateDescription') is not None else "—"
+
+                    # ترجمة تلقائية
+                    try:
+                        desc_ar = translator.translate(desc_en, src='en', dest='ar').text
+                    except Exception:
+                        desc_ar = "—"
+
+                    return f"{desc_en} - {desc_ar}"
+
         return "❌ لا توجد حالة متاحة"
     except Exception as e:
         return f"⚠️ خطأ في جلب الحالة: {e}"
@@ -204,7 +223,6 @@ if new_delivered:
     try:
         append_in_batches(delivered_sheet, new_delivered)
         append_in_batches(delivered_archive_sheet, new_delivered)
-        # إزالة الصفوف من البيانات الرئيسية
         for row in new_delivered:
             for i, r in enumerate(policy_data[1:], start=2):
                 if r[1] == row[1]:
@@ -217,7 +235,6 @@ if new_returned:
     try:
         append_in_batches(returned_sheet, new_returned)
         append_in_batches(returned_archive_sheet, new_returned)
-        # إزالة الصفوف من البيانات الرئيسية
         for row in new_returned:
             for i, r in enumerate(policy_data[1:], start=2):
                 if r[1] == row[1]:
