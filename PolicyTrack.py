@@ -85,9 +85,18 @@ custom_subject = st.text_input(
 )
 
 custom_emails_input = st.text_input(
-    "إيميلات المستلمين (افصلهم بفاصلة , إذا تريد تغييرهم — اختيارية)",
+    "إيميلات المستلمين (اختياري — افصل بينهم بفاصلة , )",
     ""
 )
+
+# ================= توحيد الأعمدة =================
+def normalize_rows(rows, n):
+    fixed = []
+    for r in rows:
+        r = r[:n]
+        r += ["—"] * (n - len(r))
+        fixed.append(r)
+    return fixed
 
 # ================= إرسال الإيميل =================
 def send_delay_email(delayed_rows, custom_emails=None, custom_subject=None):
@@ -146,12 +155,7 @@ def send_delay_email(delayed_rows, custom_emails=None, custom_subject=None):
 def get_aramex_status(awb_number):
     try:
         headers = {"Content-Type": "application/json"}
-        payload = {
-            "ClientInfo": client_info,
-            "Shipments": [awb_number],
-            "Transaction": {},
-            "LabelInfo": None
-        }
+        payload = {"ClientInfo": client_info, "Shipments": [awb_number], "Transaction": {}, "LabelInfo": None}
         url = "https://ws.aramex.net/ShippingAPI.V2/Tracking/Service_1_0.svc/json/TrackShipments"
         response = requests.post(url, json=payload, headers=headers, timeout=10)
 
@@ -230,10 +234,7 @@ if st.button("تحديث جميع الحالات الآن"):
         if int(r[4]) > 3 and "delivered" not in r[3].lower() and "returned" not in r[3].lower()
     ]
 
-    # تجهيز الأعمدة
-    for r in delayed_shipments:
-        if len(r) < 6:
-            r += ["—"] * (6 - len(r))
+    delayed_shipments = normalize_rows(delayed_shipments, 6)
 
     # إرسال الإيميل
     send_delay_email(
@@ -244,7 +245,7 @@ if st.button("تحديث جميع الحالات الآن"):
 
     st.success("✔️ تم تحديث الحالات وإرسال الإيميل.")
 
-# ================= عرض الجداول =================
+# ================= عرض الشحنات المتأخرة =================
 def check_status(text):
     text = text.lower()
     if "delivered" in text or "تم التسليم" in text:
@@ -258,6 +259,8 @@ delayed_shipments = [
     if int(row[4]) > 3 and check_status(row[3]) == "other"
 ]
 
+delayed_shipments = normalize_rows(delayed_shipments, 6)
+
 st.markdown("---")
 st.subheader("🚨 الشحنات المتأخرة")
 
@@ -267,4 +270,4 @@ if delayed_shipments:
 else:
     st.info("لا توجد شحنات متأخرة.")
 
-st.success("🚀 التطبيق جاهز ويعمل بكل الوظائف!")
+st.success("🚀 التطبيق يعمل الآن بشكل كامل وبدون أي مشاكل!")
