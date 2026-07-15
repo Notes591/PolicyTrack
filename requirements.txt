@@ -1,9 +1,8 @@
-streamlit
-gspread
-oauth2client
-pandas
-requests
-deep-translator
-openpyxl
-streamlit-autorefresh
-
+streamlit==1.39.0
+gspread==6.1.2
+oauth2client==4.1.3
+pandas==2.2.3
+requests==2.32.3
+deep-translator==1.11.4
+openpyxl==3.1.5
+streamlit-autorefresh==1.0.1
