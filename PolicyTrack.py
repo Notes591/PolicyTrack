@@ -227,6 +227,21 @@ except Exception as e:
     st.error("❌ خطأ في قراءة بيانات الشيت الرئيسي: " + str(e))
     st.stop()
 
+# التأكد من وجود عمود الملاحظة (G) في الهيدر
+if policy_data and (len(policy_data[0]) < 7 or policy_data[0][6].strip() != "ملاحظة"):
+    try:
+        policy_sheet.update_cell(1, 7, "ملاحظة")
+        if len(policy_data[0]) < 7:
+            policy_data[0] += [""] * (7 - len(policy_data[0]))
+        policy_data[0][6] = "ملاحظة"
+    except Exception:
+        pass
+
+# التأكد من إن كل صف فيه مكان لعمود الملاحظة
+for row in policy_data[1:]:
+    if len(row) < 7:
+        row += [""] * (7 - len(row))
+
 # ================= تحديث عمود الأيام وحالة الشحن =================
 if len(policy_data) >= 2:
     cells = policy_sheet.range(f'E2:E{len(policy_data)}')
@@ -468,14 +483,57 @@ with tab_main:
     else:
         st.info("لا توجد شحنات حالياً.")
 
+def _save_policy_note(policy_number, row_index, widget_key):
+    """يحفظ الملاحظة فورًا في عمود G بالشيت الرئيسي."""
+    new_value = st.session_state.get(widget_key, "")
+    try:
+        policy_sheet.update_cell(row_index, 7, new_value)
+    except Exception as e:
+        st.session_state[f"_note_error_{widget_key}"] = str(e)
+
 with tab_not_shipped:
     st.subheader("🚫 شحنات لم تُشحن من عندنا بعد (3 أيام فأكثر)")
     if not_shipped_display:
-        st.dataframe(
-            pd.DataFrame(normalize_rows(not_shipped_display, 6), columns=COLS),
-            use_container_width=True,
-            height=400
-        )
+        st.caption("💡 اكتب ملاحظة جنب أي شحنة وهتتحفظ تلقائيًا في الشيت، وهتلاقيها موجودة تاني من غير ما تعيد كتابتها.")
+
+        policy_row_index = {
+            row[1].strip(): idx
+            for idx, row in enumerate(policy_data[1:], start=2)
+            if len(row) > 1 and row[1].strip()
+        }
+
+        header_c1, header_c2, header_c3, header_c4, header_c5, header_c6 = st.columns([1.2, 1.2, 1, 1, 1, 2.5])
+        header_c1.markdown("**رقم الطلب**")
+        header_c2.markdown("**رقم البوليصة**")
+        header_c3.markdown("**التاريخ**")
+        header_c4.markdown("**الأيام**")
+        header_c5.markdown("**الحالة**")
+        header_c6.markdown("**📝 ملاحظة**")
+        st.markdown("---")
+
+        for row in not_shipped_display:
+            pol           = row[1].strip() if len(row) > 1 else ""
+            existing_note = row[6] if len(row) > 6 else ""
+            row_idx       = policy_row_index.get(pol)
+            widget_key    = f"note_{pol}"
+
+            c1, c2, c3, c4, c5, c6 = st.columns([1.2, 1.2, 1, 1, 1, 2.5])
+            c1.write(row[0] if len(row) > 0 else "—")
+            c2.write(pol or "—")
+            c3.write(row[2] if len(row) > 2 else "—")
+            c4.write(row[4] if len(row) > 4 else "—")
+            c5.write(row[3] if len(row) > 3 else "—")
+
+            if row_idx:
+                c6.text_input(
+                    "ملاحظة", value=existing_note, key=widget_key,
+                    label_visibility="collapsed",
+                    on_change=_save_policy_note, args=(pol, row_idx, widget_key)
+                )
+                if st.session_state.get(f"_note_error_{widget_key}"):
+                    c6.warning(f"لم تُحفظ: {st.session_state[f'_note_error_{widget_key}']}")
+            else:
+                c6.write(existing_note or "—")
     else:
         st.success("✅ لا توجد شحنات متأخرة فى الشحن!")
 
